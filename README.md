@@ -75,6 +75,22 @@ npm run dev
 
 The frontend proxies `/api` requests to `http://127.0.0.1:8000` during development.
 
+## Python Tests
+
+Install backend dependencies, which now include `pytest`:
+
+```bash
+./.venv/bin/python -m pip install -r backend/requirements.txt
+```
+
+Add new Python regression tests under the `test/` directory using the `test_*.py` naming pattern.
+
+Run all Python tests from the repository root:
+
+```bash
+npm run test:py
+```
+
 ## Production-Like Local Build
 
 Build the frontend bundle:

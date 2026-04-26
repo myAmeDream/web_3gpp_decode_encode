@@ -1,15 +1,52 @@
 import type { ApiEnvelope, ChangeSetItem, DecodeResponse, EncodeResponse, NasRequest, NasResult, ValidateResponse } from "./types";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+const DEV_BACKEND_URL = "http://127.0.0.1:8000";
 
-  const payload = (await response.json()) as ApiEnvelope<T>;
+function buildConnectionError(): Error {
+  return new Error(`Cannot reach the backend API. Start the backend service on ${DEV_BACKEND_URL}.`);
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+    });
+  } catch {
+    throw buildConnectionError();
+  }
+
+  const responseText = await response.text();
+  let payload: ApiEnvelope<T> | null = null;
+
+  if (responseText.trim().length > 0) {
+    try {
+      payload = JSON.parse(responseText) as ApiEnvelope<T>;
+    } catch {
+      if (!response.ok) {
+        throw new Error(responseText.trim() || `Request failed with status ${response.status}.`);
+      }
+      throw new Error("The backend returned an invalid JSON response.");
+    }
+  }
+
+  if (!response.ok) {
+    if (payload?.error?.message) {
+      throw new Error(payload.error.message);
+    }
+    throw response.status >= 500 && responseText.trim().length === 0
+      ? buildConnectionError()
+      : new Error(responseText.trim() || `Request failed with status ${response.status}.`);
+  }
+
+  if (!payload) {
+    throw buildConnectionError();
+  }
+
   if (!payload.success || !payload.data) {
     throw new Error(payload.error?.message || "Request failed");
   }

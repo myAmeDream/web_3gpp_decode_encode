@@ -51,6 +51,21 @@ def asn1_to_tree(obj, name="root"):
     return _convert(val, name)
 
 
+def _is_bitstring_value(val):
+    return isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], int) and isinstance(val[1], int)
+
+
+def _format_bitstring_value(value, bit_length):
+    if bit_length <= 0:
+        return "''H"
+
+    if bit_length % 4 == 0:
+        hex_digits = (bit_length + 3) // 4
+        return f"'{value:0{hex_digits}X}'H"
+
+    return f"'{value:0{bit_length}b}'B"
+
+
 def _convert(val, name):
     """Recursively convert a pycrate value to a tree node."""
     if isinstance(val, dict):
@@ -62,6 +77,8 @@ def _convert(val, name):
         # ASN.1 CHOICE type: (choice_name, choice_value)
         child = _convert(val[1], val[0])
         return {"name": name, "value": "", "children": [child]}
+    elif _is_bitstring_value(val):
+        return {"name": name, "value": _format_bitstring_value(val[0], val[1]), "children": []}
     elif isinstance(val, (list, tuple)):
         children = []
         for i, v in enumerate(val):
@@ -299,6 +316,8 @@ def _val_to_json(val):
         return {"_type": "dict", "_items": {k: _val_to_json(v) for k, v in val.items()}}
     elif isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], str):
         return {"_type": "choice", "_name": val[0], "_value": _val_to_json(val[1])}
+    elif _is_bitstring_value(val):
+        return {"_type": "bitstring", "_uint": val[0], "_bits": val[1]}
     elif isinstance(val, (list, tuple)):
         return {"_type": "list", "_items": [_val_to_json(v) for v in val]}
     elif isinstance(val, bytes):
@@ -324,6 +343,8 @@ def _json_to_val(j):
         return {k: _json_to_val(v) for k, v in j["_items"].items()}
     elif t == "choice":
         return (j["_name"], _json_to_val(j["_value"]))
+    elif t == "bitstring":
+        return (j["_uint"], j["_bits"])
     elif t == "list":
         return [_json_to_val(v) for v in j["_items"]]
     elif t == "bytes":

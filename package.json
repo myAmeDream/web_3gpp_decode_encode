@@ -1,0 +1,8 @@
+{
+  "name": "web-3gpp-decode-encode",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test:py": ".\\.venv\\Scripts\\python.exe -m pytest"
+  }
+}
