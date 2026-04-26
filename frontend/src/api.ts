@@ -1,4 +1,4 @@
-import type { ApiEnvelope, DecodeResponse, EncodeResponse, NasRequest, NasResult } from "./types";
+import type { ApiEnvelope, ChangeSetItem, DecodeResponse, EncodeResponse, NasRequest, NasResult, ValidateResponse } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -44,8 +44,23 @@ export function encodeMessage(messageType: string, canonicalModel: Record<string
       canonicalModel,
       options: {
         returnCArray: true,
-        validateBeforeEncode: false,
+        validateBeforeEncode: true,
       },
+    }),
+  });
+}
+
+export function validateMessage(
+  messageType: string,
+  canonicalModel: Record<string, unknown>,
+  changeSet: ChangeSetItem[] = [],
+): Promise<ValidateResponse> {
+  return request("/api/v1/protocol/validate", {
+    method: "POST",
+    body: JSON.stringify({
+      messageType,
+      canonicalModel,
+      changeSet,
     }),
   });
 }

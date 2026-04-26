@@ -9,10 +9,11 @@ This repository now contains a minimal React + FastAPI monolith that reuses the 
 Current implementation scope:
 
 1. Web UI for decode and encode round-trip.
-2. NAS security encrypt and decrypt UI.
-3. FastAPI backend wrapping the existing Python runtime.
-4. Single Linux machine deployment target.
-5. Schema and IE add/delete endpoints reserved as stubs for the next phase.
+2. Double-click editing for existing decoded IE leaf values.
+3. Frontend type validation plus backend pycrate-backed validation before encode.
+4. NAS security encrypt and decrypt UI.
+5. FastAPI backend wrapping the existing Python runtime.
+6. Single Linux machine deployment target.
 
 ## Project Structure
 
@@ -87,15 +88,16 @@ After the `frontend/dist` directory exists, the FastAPI application will serve t
 
 ## Current Limitations
 
-1. IE add and delete are not implemented in the first monolith build yet.
-2. `/api/v1/protocol/schema/node`, `/api/v1/protocol/schema/template`, and `/api/v1/protocol/validate` currently return placeholders for the next phase.
-3. Encode currently uses the existing legacy raw value structure returned by the reference Python script.
-4. NAS structure-level add/delete is still unsupported.
+1. IE add and delete are not implemented yet.
+2. `/api/v1/protocol/schema/node` and `/api/v1/protocol/schema/template` still return placeholders until the schema-driven phase.
+3. Encode and validate currently operate on the legacy raw value structure returned by the reference Python script.
+4. Frontend edit validation is limited to basic type checks; full schema-driven strong validation is deferred to phase 3.
+5. NAS structure-level add/delete is still unsupported.
 
 ## Next Recommended Step
 
-Implement schema-driven canonical model conversion in the backend so the frontend can support:
+Implement the third-phase schema-driven model layer so the frontend can support:
 
 1. Add previously absent optional IE.
 2. Delete currently present optional IE.
-3. Validate structural edits before encode.
+3. Strong schema-driven field validation before commit.

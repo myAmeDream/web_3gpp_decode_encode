@@ -300,6 +300,30 @@ textarea {
   word-break: break-all;
 }
 
+.tree-value-editable {
+  cursor: text;
+  text-decoration: underline dotted rgba(255, 209, 163, 0.55);
+  text-underline-offset: 0.2rem;
+}
+
+.tree-value-editable:hover {
+  color: #ffe7c8;
+}
+
+.tree-value-modified {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.tree-value-input {
+  width: auto;
+  min-width: 6rem;
+  max-width: min(24rem, 60vw);
+  padding: 0.32rem 0.55rem;
+  border-radius: 10px;
+  font-family: "SFMono-Regular", "Menlo", monospace;
+}
+
 .tree-children {
   margin-left: 0.75rem;
   border-left: 1px solid rgba(255, 224, 189, 0.08);

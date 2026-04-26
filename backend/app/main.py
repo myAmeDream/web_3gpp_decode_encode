@@ -85,7 +85,14 @@ def decode_protocol(payload: DecodeRequest) -> ApiResponse:
 @app.post("/api/v1/protocol/validate")
 def validate_protocol(payload: ValidateRequest) -> ApiResponse:
     request_id = make_request_id()
-    return success_response(request_id, build_validation_response())
+    return success_response(
+        request_id,
+        build_validation_response(
+            payload.messageType,
+            payload.canonicalModel,
+            [item.model_dump() for item in payload.changeSet],
+        ),
+    )
 
 
 @app.post("/api/v1/protocol/encode")
@@ -93,7 +100,18 @@ def encode_protocol(payload: EncodeRequest) -> ApiResponse:
     request_id = make_request_id()
     validation = None
     if payload.options.validateBeforeEncode:
-        validation = {"performed": True, **build_validation_response()}
+        validation = {
+            "performed": True,
+            **build_validation_response(payload.messageType, payload.canonicalModel),
+        }
+        if not validation["valid"]:
+            first_error = validation["errors"][0]
+            return error_response(
+                request_id,
+                "VALIDATION_ERROR",
+                str(first_error.get("message", "Validation failed")),
+                validation["errors"],
+            )
 
     try:
         result = run_protocol_command(

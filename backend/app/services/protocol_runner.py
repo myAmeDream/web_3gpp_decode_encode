@@ -114,6 +114,13 @@ def extract_raw_value(canonical_model: dict[str, Any]) -> Any:
     return canonical_model
 
 
+def _build_validation_issue(message: str, path: list[str] | None = None) -> dict[str, Any]:
+    issue: dict[str, Any] = {"code": "VALIDATION_ERROR", "message": message}
+    if path:
+        issue["path"] = path
+    return issue
+
+
 def build_encode_response(message_type: str, result: dict[str, Any], validation: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "messageType": message_type,
@@ -148,14 +155,41 @@ def build_schema_template_response(message_type: str, parent_path: list[str], ie
     }
 
 
-def build_validation_response() -> dict[str, Any]:
+def build_validation_response(
+    message_type: str,
+    canonical_model: dict[str, Any],
+    change_set: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    change_path: list[str] | None = None
+    if change_set:
+        raw_path = change_set[-1].get("path")
+        if isinstance(raw_path, list):
+            change_path = [str(item) for item in raw_path]
+
+    try:
+        result = run_protocol_command(
+            {
+                "command": "encode",
+                "msgType": message_type,
+                "rawVal": extract_raw_value(canonical_model),
+            }
+        )
+    except ProtocolRunnerError as exc:
+        return {
+            "valid": False,
+            "errors": [_build_validation_issue(str(exc), change_path)],
+            "warnings": [],
+        }
+
+    if result.get("error"):
+        return {
+            "valid": False,
+            "errors": [_build_validation_issue(str(result["error"]), change_path)],
+            "warnings": [],
+        }
+
     return {
         "valid": True,
         "errors": [],
-        "warnings": [
-            {
-                "code": "VALIDATION_BYPASSED",
-                "message": "Strict schema validation is not implemented in the initial monolith build yet.",
-            }
-        ],
+        "warnings": [],
     }

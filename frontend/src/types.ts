@@ -15,6 +15,26 @@ export type CanonicalModel = Record<string, unknown> & {
   rawVal?: unknown;
 };
 
+export type ChangeSetItem = {
+  op: "add" | "remove" | "replace";
+  path: string[];
+  oldValue?: unknown;
+  newValue?: unknown;
+  value?: unknown;
+};
+
+export type ValidationIssue = {
+  code: string;
+  message: string;
+  path?: string[];
+};
+
+export type ValidateResponse = {
+  valid: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+};
+
 export type DecodeResponse = {
   messageType: string;
   normalizedHex: string;

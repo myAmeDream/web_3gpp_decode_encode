@@ -515,6 +515,12 @@ Validation categories:
 5. Sequence/list cardinality.
 6. NAS-specific semantic constraints where applicable.
 
+Phase 2 implementation note:
+
+1. The backend validates edited existing IE values by attempting a pycrate-backed encode of the submitted raw value model.
+2. This makes `/api/v1/protocol/validate` a practical authority check for edited existing fields.
+3. Full schema-driven strong validation with field-level constraints remains a later phase.
+
 ### 8.6 Encode Canonical Model
 
 Method:
@@ -709,24 +715,34 @@ Implementation recommendation:
 Supported:
 
 1. Existing capability parity with VS Code extension.
-2. RRC value update.
-3. RRC add optional IE.
-4. RRC delete optional IE.
-5. RRC list item add/remove where ASN.1 permits.
-6. NAS decode/encode parity.
-7. NAS security encrypt/decrypt.
-
-Limited:
-
-1. NAS structure-level add/delete may return `ILLEGAL_ADD_OPERATION` or `ILLEGAL_DELETE_OPERATION` until backend modeling is upgraded.
+2. Decode and encode round-trip.
+3. NAS decode/encode parity.
+4. NAS security encrypt/decrypt.
 
 ### Phase 2
 
+Supported:
+
+1. Existing decoded IE leaf value edit for already-present fields.
+2. Frontend basic type validation for int, bool, bytes, and string values.
+3. Backend authority validation through `/api/v1/protocol/validate`.
+4. Encode rejection when validation fails.
+
+Limited:
+
+1. Add previously absent IE is not implemented.
+2. Delete currently present IE is not implemented.
+3. Validation is not yet schema-driven; it relies on pycrate encode acceptance.
+
+### Phase 3
+
 Target:
 
-1. NAS structure-level editing.
-2. Choice switching helpers.
-3. Rich schema-driven form generation.
+1. Add previously absent optional IE.
+2. Delete existing optional IE.
+3. Schema-driven strong field validation.
+4. Choice switching helpers.
+5. Rich schema-driven form generation.
 
 ## 11. Backend Mapping Strategy
 

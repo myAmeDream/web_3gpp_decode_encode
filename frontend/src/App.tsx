@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 
-import { decodeMessage, decryptNas, encodeMessage, encryptNas, fetchMessageTypes } from "./api";
-import type { DecodeResponse, EncodeResponse, NasRequest, NasResult, TreeNode } from "./types";
-
+import { decodeMessage, decryptNas, encodeMessage, encryptNas, fetchMessageTypes, validateMessage } from "./api";
+import type {
+  CanonicalModel,
+  ChangeSetItem,
+  DecodeResponse,
+  EncodeResponse,
+  NasRequest,
+  NasResult,
+  TreeNode,
+} from "./types";
 
 const INITIAL_NAS_FORM: NasRequest = {
   hexData: "",
@@ -17,29 +24,421 @@ const INITIAL_NAS_FORM: NasRequest = {
   newSecurityContext: false,
 };
 
+type RawValueNode = {
+  _type: string;
+  _items?: Record<string, RawValueNode> | RawValueNode[];
+  _name?: string;
+  _value?: RawValueNode;
+  _hex?: string;
+  _val?: boolean | number | string | null;
+  _original_hex?: string;
+};
 
-function TreeView({ node }: { node: TreeNode }) {
-  const children = [...(node.children ?? []), ...(node.derivedChildren ?? [])];
+type TreeViewProps = {
+  node: TreeNode;
+  path: string[];
+  rawValue: RawValueNode | null;
+  modifiedPaths: Set<string>;
+  isBusy: boolean;
+  isDerived?: boolean;
+  onCommitEdit: (path: string[], nextInput: string, originalInput: string) => Promise<boolean>;
+};
+
+type BasicValidationResult =
+  | {
+      valid: true;
+      updatedNode: RawValueNode;
+      displayValue: string;
+      submittedValue: boolean | number | string;
+    }
+  | {
+      valid: false;
+      message: string;
+    };
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function isRawValueNode(value: unknown): value is RawValueNode {
+  return typeof value === "object" && value !== null && "_type" in value;
+}
+
+function parseListIndex(segment: string): number {
+  return Number.parseInt(segment.replace(/[[\]]/g, ""), 10);
+}
+
+function pathKey(path: string[]): string {
+  return path.join("/");
+}
+
+function extractEditableText(value?: string): string {
+  if (!value) {
+    return "";
+  }
+
+  const intMatch = value.match(/^(-?(?:0x[0-9a-fA-F]+|\d+))\s*\(0x/i);
+  if (intMatch) {
+    return intMatch[1];
+  }
+
+  return value;
+}
+
+function isEditableRawType(node: RawValueNode | null): boolean {
+  return Boolean(node && ["int", "str", "bytes", "bool"].includes(node._type));
+}
+
+function getDictItems(node: RawValueNode): Record<string, RawValueNode> | null {
+  if (node._type !== "dict") {
+    return null;
+  }
+
+  const items = node._items;
+  if (!items || Array.isArray(items)) {
+    return null;
+  }
+
+  return items as Record<string, RawValueNode>;
+}
+
+function getListItems(node: RawValueNode): RawValueNode[] | null {
+  if (node._type !== "list") {
+    return null;
+  }
+
+  const items = node._items;
+  if (!items || !Array.isArray(items)) {
+    return null;
+  }
+
+  return items as RawValueNode[];
+}
+
+function getRawNodeAtPath(rawValue: RawValueNode, path: string[]): RawValueNode | null {
+  let node: RawValueNode | undefined = rawValue;
+
+  for (const segment of path) {
+    if (!node) {
+      return null;
+    }
+
+    if (node._type === "dict") {
+      const items = getDictItems(node);
+      if (!items) {
+        return null;
+      }
+      node = items[segment];
+      continue;
+    }
+
+    if (node._type === "choice") {
+      node = node._value;
+      continue;
+    }
+
+    if (node._type === "list") {
+      const items = getListItems(node);
+      if (!items) {
+        return null;
+      }
+      node = items[parseListIndex(segment)];
+      continue;
+    }
+
+    return null;
+  }
+
+  return node ?? null;
+}
+
+function setRawNodeAtPath(rawValue: RawValueNode, path: string[], nextNode: RawValueNode): boolean {
+  if (path.length === 0) {
+    return false;
+  }
+
+  let node: RawValueNode | undefined = rawValue;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const segment = path[index];
+    if (!node) {
+      return false;
+    }
+
+    if (node._type === "dict") {
+      const items = getDictItems(node);
+      if (!items) {
+        return false;
+      }
+      node = items[segment];
+      continue;
+    }
+
+    if (node._type === "choice") {
+      node = node._value;
+      continue;
+    }
+
+    if (node._type === "list") {
+      const items = getListItems(node);
+      if (!items) {
+        return false;
+      }
+      node = items[parseListIndex(segment)];
+      continue;
+    }
+
+    return false;
+  }
+
+  if (!node) {
+    return false;
+  }
+
+  const lastSegment = path[path.length - 1];
+  if (node._type === "dict") {
+    const items = getDictItems(node);
+    if (!items) {
+      return false;
+    }
+    items[lastSegment] = nextNode;
+    return true;
+  }
+
+  if (node._type === "choice") {
+    node._value = nextNode;
+    return true;
+  }
+
+  if (node._type === "list") {
+    const items = getListItems(node);
+    if (!items) {
+      return false;
+    }
+    items[parseListIndex(lastSegment)] = nextNode;
+    return true;
+  }
+
+  return false;
+}
+
+function readRawNodeValue(node: RawValueNode): unknown {
+  if (node._type === "int" || node._type === "str" || node._type === "bool") {
+    return node._val;
+  }
+  if (node._type === "bytes") {
+    return node._hex;
+  }
+  return undefined;
+}
+
+function buildUpdatedRawNode(node: RawValueNode, inputValue: string): BasicValidationResult {
+  const trimmed = inputValue.trim();
+
+  if (node._type === "int") {
+    if (!/^[-+]?(?:0x[0-9a-fA-F]+|\d+)$/.test(trimmed)) {
+      return { valid: false, message: "This IE expects an integer value." };
+    }
+
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed)) {
+      return { valid: false, message: "This IE expects an integer value." };
+    }
+
+    return {
+      valid: true,
+      updatedNode: { ...node, _val: parsed },
+      displayValue: `${parsed} (0x${parsed.toString(16).toUpperCase()})`,
+      submittedValue: parsed,
+    };
+  }
+
+  if (node._type === "bytes") {
+    if (trimmed.length === 0) {
+      return { valid: false, message: "This IE expects hexadecimal bytes." };
+    }
+
+    if (!/^[0-9a-fA-F\s]+$/.test(trimmed)) {
+      return { valid: false, message: "This IE expects hexadecimal bytes only." };
+    }
+
+    const normalized = trimmed.replace(/\s+/g, "").toUpperCase();
+    if (normalized.length % 2 !== 0) {
+      return { valid: false, message: "Hex byte strings must contain an even number of hex digits." };
+    }
+
+    return {
+      valid: true,
+      updatedNode: { ...node, _hex: normalized },
+      displayValue: normalized,
+      submittedValue: normalized,
+    };
+  }
+
+  if (node._type === "bool") {
+    const normalized = trimmed.toLowerCase();
+    if (normalized !== "true" && normalized !== "false") {
+      return { valid: false, message: "This IE expects true or false." };
+    }
+
+    const parsed = normalized === "true";
+    return {
+      valid: true,
+      updatedNode: { ...node, _val: parsed },
+      displayValue: String(parsed),
+      submittedValue: parsed,
+    };
+  }
+
+  if (node._type === "str") {
+    return {
+      valid: true,
+      updatedNode: { ...node, _val: inputValue },
+      displayValue: inputValue,
+      submittedValue: inputValue,
+    };
+  }
+
+  return {
+    valid: false,
+    message: `Editing raw value type '${node._type}' is not supported in phase 2.`,
+  };
+}
+
+function updateTreeValue(node: TreeNode, path: string[], nextValue: string): TreeNode {
+  if (path.length === 0) {
+    return { ...node, value: nextValue };
+  }
+
+  const [head, ...rest] = path;
+  return {
+    ...node,
+    children: (node.children ?? []).map((child) => (child.name === head ? updateTreeValue(child, rest, nextValue) : child)),
+  };
+}
+
+function TreeView({ node, path, rawValue, modifiedPaths, isBusy, isDerived = false, onCommitEdit }: TreeViewProps) {
+  const children = node.children ?? [];
+  const derivedChildren = node.derivedChildren ?? [];
+  const combinedChildren = [...children, ...derivedChildren];
   const [collapsed, setCollapsed] = useState(Boolean(node.defaultCollapsed));
+  const [editing, setEditing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [draftValue, setDraftValue] = useState(extractEditableText(node.value));
+
+  const rawNode = rawValue ? getRawNodeAtPath(rawValue, path) : null;
+  const isEditable = !isDerived && children.length === 0 && isEditableRawType(rawNode);
+  const isModified = modifiedPaths.has(pathKey(path));
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftValue(extractEditableText(node.value));
+    }
+  }, [editing, node.value]);
+
+  async function commitEdit() {
+    if (!isEditable || !node.value) {
+      setEditing(false);
+      return;
+    }
+
+    const originalInput = extractEditableText(node.value);
+    if (draftValue === originalInput) {
+      setEditing(false);
+      return;
+    }
+
+    setSubmitting(true);
+    const success = await onCommitEdit(path, draftValue, originalInput);
+    setSubmitting(false);
+    setEditing(false);
+    if (!success) {
+      setDraftValue(originalInput);
+    }
+  }
 
   return (
     <div className="tree-node">
-      <div className="tree-label" onClick={() => setCollapsed((value) => !value)}>
-        <span className="tree-toggle">{children.length ? (collapsed ? ">" : "v") : "-"}</span>
+      <div className="tree-label" onClick={() => combinedChildren.length && setCollapsed((value) => !value)}>
+        <span className="tree-toggle">{combinedChildren.length ? (collapsed ? ">" : "v") : "-"}</span>
         <span className="tree-name">{node.name}</span>
-        {node.value ? <span className="tree-value">{node.value}</span> : null}
+        {node.value ? (
+          editing ? (
+            <input
+              autoFocus
+              className="tree-value-input"
+              disabled={submitting}
+              onBlur={() => {
+                void commitEdit();
+              }}
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => setDraftValue(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Enter") {
+                  void commitEdit();
+                }
+                if (event.key === "Escape") {
+                  setDraftValue(extractEditableText(node.value));
+                  setEditing(false);
+                }
+              }}
+              value={draftValue}
+            />
+          ) : (
+            <span
+              className={`tree-value${isEditable ? " tree-value-editable" : ""}${isModified ? " tree-value-modified" : ""}`}
+              onClick={(event) => {
+                if (isEditable) {
+                  event.stopPropagation();
+                }
+              }}
+              onDoubleClick={(event) => {
+                if (!isEditable || isBusy) {
+                  return;
+                }
+                event.stopPropagation();
+                setDraftValue(extractEditableText(node.value));
+                setEditing(true);
+              }}
+            >
+              {node.value}
+            </span>
+          )
+        ) : null}
       </div>
-      {!collapsed && children.length ? (
+      {!collapsed && combinedChildren.length ? (
         <div className="tree-children">
-          {children.map((child, index) => (
-            <TreeView key={`${child.name}-${index}`} node={child} />
+          {children.map((child, index) => {
+            const childPath = [...path, child.name];
+            return (
+              <TreeView
+                key={`${pathKey(childPath)}-${index}`}
+                isBusy={isBusy}
+                modifiedPaths={modifiedPaths}
+                node={child}
+                onCommitEdit={onCommitEdit}
+                path={childPath}
+                rawValue={rawValue}
+              />
+            );
+          })}
+          {derivedChildren.map((child, index) => (
+            <TreeView
+              key={`derived-${child.name}-${index}`}
+              isBusy={isBusy}
+              isDerived
+              modifiedPaths={modifiedPaths}
+              node={child}
+              onCommitEdit={onCommitEdit}
+              path={[]}
+              rawValue={rawValue}
+            />
           ))}
         </div>
       ) : null}
     </div>
   );
 }
-
 
 export default function App() {
   const [messageTypes, setMessageTypes] = useState<string[]>([]);
@@ -51,8 +450,12 @@ export default function App() {
   const [encodeResult, setEncodeResult] = useState<EncodeResponse | null>(null);
   const [nasResult, setNasResult] = useState<NasResult | null>(null);
   const [nasForm, setNasForm] = useState<NasRequest>(INITIAL_NAS_FORM);
-  const [busy, setBusy] = useState<"decode" | "encode" | "encrypt" | "decrypt" | null>(null);
+  const [modifiedPaths, setModifiedPaths] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<"decode" | "encode" | "encrypt" | "decrypt" | "validate" | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const currentRawValue = decodeResult && isRawValueNode(decodeResult.canonicalModel.rawVal) ? decodeResult.canonicalModel.rawVal : null;
+  const isNasDecryptResult = typeof nasResult?.macOk === "boolean" || Boolean(nasResult?.plaintext && nasResult?.macReceived);
 
   useEffect(() => {
     void fetchMessageTypes()
@@ -65,6 +468,7 @@ export default function App() {
     setError(null);
     setEncodeResult(null);
     setNasResult(null);
+    setModifiedPaths(new Set());
 
     try {
       const result = await decodeMessage(messageType, hexData);
@@ -94,6 +498,77 @@ export default function App() {
     }
   }
 
+  async function handleTreeEdit(path: string[], nextInput: string, originalInput: string): Promise<boolean> {
+    if (!decodeResult || !currentRawValue) {
+      return false;
+    }
+
+    const currentNode = getRawNodeAtPath(currentRawValue, path);
+    if (!currentNode) {
+      setError("The selected IE could not be resolved in the current raw model.");
+      return false;
+    }
+
+    const basicValidation = buildUpdatedRawNode(currentNode, nextInput);
+    if (!basicValidation.valid) {
+      setError(basicValidation.message);
+      return false;
+    }
+
+    if (nextInput === originalInput) {
+      return true;
+    }
+
+    const nextRawValue = cloneJson(currentRawValue);
+    if (!setRawNodeAtPath(nextRawValue, path, basicValidation.updatedNode)) {
+      setError("Failed to apply the edited IE value to the current raw model.");
+      return false;
+    }
+
+    const nextCanonicalModel: CanonicalModel = {
+      ...decodeResult.canonicalModel,
+      rawVal: nextRawValue,
+    };
+
+    const changeSet: ChangeSetItem[] = [
+      {
+        op: "replace",
+        path,
+        oldValue: readRawNodeValue(currentNode),
+        newValue: basicValidation.submittedValue,
+      },
+    ];
+
+    setBusy("validate");
+    setError(null);
+    try {
+      const validation = await validateMessage(decodeResult.messageType, nextCanonicalModel, changeSet);
+      if (!validation.valid) {
+        setError(validation.errors[0]?.message ?? "Validation failed.");
+        return false;
+      }
+
+      setDecodeResult({
+        ...decodeResult,
+        canonicalModel: nextCanonicalModel,
+        rawVal: nextRawValue,
+        displayTree: updateTreeValue(decodeResult.displayTree, path, basicValidation.displayValue),
+      });
+      setEncodeResult(null);
+      setModifiedPaths((current) => {
+        const next = new Set(current);
+        next.add(pathKey(path));
+        return next;
+      });
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Validation failed.");
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleNas(mode: "encrypt" | "decrypt") {
     setBusy(mode);
     setError(null);
@@ -107,23 +582,22 @@ export default function App() {
       if (decodedTree && canonicalModel) {
         const nextType = "NAS-5G-Message";
         setMessageType(nextType);
-        setDecodeResult((current) => {
-          return {
-            messageType: nextType,
-            normalizedHex: result.plaintext ?? "",
-            decodeSessionId: current?.decodeSessionId ?? "nas-session",
-            displayTree: decodedTree,
-            canonicalModel,
-            rawVal: canonicalModel.rawVal,
-            textView: result.textView ?? "",
-            schemaHints: {
-              editableNodeCount: 0,
-              addableNodeCount: 0,
-              deletableNodeCount: 0,
-              phase: "legacy",
-            },
-          };
-        });
+        setModifiedPaths(new Set());
+        setDecodeResult((current) => ({
+          messageType: nextType,
+          normalizedHex: result.plaintext ?? "",
+          decodeSessionId: current?.decodeSessionId ?? "nas-session",
+          displayTree: decodedTree,
+          canonicalModel,
+          rawVal: canonicalModel.rawVal,
+          textView: result.textView ?? "",
+          schemaHints: {
+            editableNodeCount: 0,
+            addableNodeCount: 0,
+            deletableNodeCount: 0,
+            phase: "legacy",
+          },
+        }));
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : `${mode} failed`);
@@ -136,8 +610,6 @@ export default function App() {
     setNasForm((current) => ({ ...current, [key]: value }));
   }
 
-  const isNasDecryptResult = typeof nasResult?.macOk === "boolean" || Boolean(nasResult?.plaintext && nasResult?.macReceived);
-
   return (
     <div className="page-shell">
       <header className="hero-panel">
@@ -145,8 +617,8 @@ export default function App() {
           <div className="eyebrow">Internal Pilot</div>
           <h1>3GPP Decoder and Encoder Web Console</h1>
           <p>
-            Single-machine React and FastAPI monolith. The first build keeps the existing Python decode and encode runtime,
-            and prepares the UI shell for future IE add and delete workflows.
+            Single-machine React and FastAPI monolith. Phase 2 keeps the existing Python runtime and now supports editing
+            existing IE leaf values with client-side type validation and backend pycrate validation.
           </p>
         </div>
         <div className="hero-card">
@@ -199,8 +671,8 @@ export default function App() {
             ) : null}
           </div>
           <div className="status-strip">
-            <span>IE add/delete UI is reserved for the next phase.</span>
-            <span>Current build keeps decode, encode, and NAS security functional.</span>
+            <span>Double-click an existing leaf IE to edit it in phase 2.</span>
+            <span>Add and delete IE operations are reserved for the next phase.</span>
           </div>
         </section>
 
@@ -211,7 +683,14 @@ export default function App() {
               <span>{decodeResult.messageType}</span>
             </div>
             <div className="tree-surface">
-              <TreeView node={decodeResult.displayTree} />
+              <TreeView
+                isBusy={busy !== null}
+                modifiedPaths={modifiedPaths}
+                node={decodeResult.displayTree}
+                onCommitEdit={handleTreeEdit}
+                path={[]}
+                rawValue={currentRawValue}
+              />
             </div>
           </section>
         ) : null}
