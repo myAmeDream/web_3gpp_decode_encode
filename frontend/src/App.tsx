@@ -31,6 +31,8 @@ type RawValueNode = {
   _value?: RawValueNode;
   _hex?: string;
   _val?: boolean | number | string | null;
+  _uint?: number;
+  _bits?: number;
   _original_hex?: string;
 };
 
@@ -86,7 +88,7 @@ function extractEditableText(value?: string): string {
 }
 
 function isEditableRawType(node: RawValueNode | null): boolean {
-  return Boolean(node && ["int", "str", "bytes", "bool"].includes(node._type));
+  return Boolean(node && ["int", "str", "bytes", "bool", "bitstring"].includes(node._type));
 }
 
 function getDictItems(node: RawValueNode): Record<string, RawValueNode> | null {
@@ -221,12 +223,28 @@ function setRawNodeAtPath(rawValue: RawValueNode, path: string[], nextNode: RawV
   return false;
 }
 
+function formatBitstringDisplay(uint: number, bits: number): string {
+  if (bits <= 0) {
+    return "''H";
+  }
+  if (bits % 4 === 0) {
+    const hexDigits = bits / 4;
+    return `'${uint.toString(16).toUpperCase().padStart(hexDigits, "0")}'H`;
+  }
+  return `'${uint.toString(2).padStart(bits, "0")}'B`;
+}
+
 function readRawNodeValue(node: RawValueNode): unknown {
   if (node._type === "int" || node._type === "str" || node._type === "bool") {
     return node._val;
   }
   if (node._type === "bytes") {
     return node._hex;
+  }
+  if (node._type === "bitstring") {
+    const bits = typeof node._bits === "number" ? node._bits : 0;
+    const uint = typeof node._uint === "number" ? node._uint : 0;
+    return formatBitstringDisplay(uint, bits);
   }
   return undefined;
 }
@@ -295,6 +313,56 @@ function buildUpdatedRawNode(node: RawValueNode, inputValue: string): BasicValid
       updatedNode: { ...node, _val: inputValue },
       displayValue: inputValue,
       submittedValue: inputValue,
+    };
+  }
+
+  if (node._type === "bitstring") {
+    const bits = typeof node._bits === "number" ? node._bits : 0;
+    if (bits <= 0) {
+      return { valid: false, message: "BIT STRING bit length is unknown; cannot edit." };
+    }
+
+    let inner = trimmed;
+    let isBinaryForm = bits % 4 !== 0;
+
+    const fullMatch = trimmed.match(/^'([0-9a-fA-F]*)'([HB])$/);
+    if (fullMatch) {
+      inner = fullMatch[1];
+      isBinaryForm = fullMatch[2] === "B";
+    }
+
+    if (isBinaryForm) {
+      if (!/^[01]*$/.test(inner)) {
+        return { valid: false, message: "Binary BIT STRING expects only 0/1 digits." };
+      }
+      if (inner.length !== bits) {
+        return { valid: false, message: `BIT STRING expects ${bits} bits.` };
+      }
+      const parsed = inner.length ? Number.parseInt(inner, 2) : 0;
+      const display = `'${inner}'B`;
+      return {
+        valid: true,
+        updatedNode: { ...node, _uint: parsed, _bits: bits },
+        displayValue: display,
+        submittedValue: display,
+      };
+    }
+
+    if (!/^[0-9a-fA-F]*$/.test(inner)) {
+      return { valid: false, message: "Hex BIT STRING expects only hex digits." };
+    }
+    const expectedHexDigits = bits / 4;
+    if (inner.length !== expectedHexDigits) {
+      return { valid: false, message: `BIT STRING expects ${expectedHexDigits} hex digits (${bits} bits).` };
+    }
+    const parsed = inner.length ? Number.parseInt(inner, 16) : 0;
+    const upper = inner.toUpperCase();
+    const display = `'${upper}'H`;
+    return {
+      valid: true,
+      updatedNode: { ...node, _uint: parsed, _bits: bits },
+      displayValue: display,
+      submittedValue: display,
     };
   }
 

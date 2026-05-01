@@ -101,26 +101,63 @@ def _convert(val, name):
         return {"name": name, "value": str(val), "children": []}
 
 
+def _nas_iter_children(elem):
+    """Yield immediate child elements from a pycrate NAS element.
+
+    Handles three pycrate container shapes that look different at the
+    Python level:
+      - Envelope: ``_content`` is a list of static children
+      - Alt: ``_content`` is a dict ``{selector: element}``; iterating
+        the dict yields integer keys, not children, so we pick the
+        selected alternative via ``get_sel()``
+      - Array: no ``_content`` attribute, but iterable with a ``_tmpl``
+    """
+    content = getattr(elem, '_content', None)
+    if isinstance(content, dict):
+        sel = elem.get_sel() if hasattr(elem, 'get_sel') else None
+        if sel in content:
+            yield content[sel]
+        return
+    if isinstance(content, (list, tuple)):
+        for e in content:
+            yield e
+        return
+    if hasattr(elem, '_tmpl') and hasattr(elem, '__iter__'):
+        for e in elem:
+            yield e
+
+
+def _is_nas_container(e):
+    content = getattr(e, '_content', None)
+    if isinstance(content, dict) and content:
+        return True
+    if isinstance(content, (list, tuple)) and content:
+        return True
+    if hasattr(e, '_tmpl') and hasattr(e, '__iter__'):
+        return True
+    return False
+
+
 def _nas_elem_to_tree(elem, name="root"):
-    """Convert a pycrate NAS element (Envelope) to a tree node."""
+    """Convert a pycrate NAS element (Envelope / Alt / Array) to a tree node."""
     children = []
-    # Iterate through the element's content
-    for e in elem._content:
-        if hasattr(e, '_content') and e._content:
-            children.append(_nas_elem_to_tree(e, e._name))
+    for e in _nas_iter_children(elem):
+        child_name = getattr(e, '_name', '?')
+        if _is_nas_container(e):
+            children.append(_nas_elem_to_tree(e, child_name))
         elif hasattr(e, 'get_val'):
             val = e.get_val()
             if isinstance(val, dict):
-                sub_children = []
-                for k, v in val.items():
-                    sub_children.append(_convert(v, k))
-                children.append({"name": e._name, "value": "", "children": sub_children})
+                sub_children = [_convert(v, k) for k, v in val.items()]
+                children.append({"name": child_name, "value": "", "children": sub_children})
             elif isinstance(val, bytes):
-                children.append({"name": e._name, "value": val.hex().upper(), "children": []})
+                children.append({"name": child_name, "value": val.hex().upper(), "children": []})
             elif isinstance(val, int):
-                children.append({"name": e._name, "value": f"{val} (0x{val:X})", "children": []})
+                children.append({"name": child_name, "value": f"{val} (0x{val:X})", "children": []})
             elif val is not None:
-                children.append({"name": e._name, "value": str(val), "children": []})
+                children.append({"name": child_name, "value": str(val), "children": []})
+            else:
+                children.append({"name": child_name, "value": "", "children": []})
         elif hasattr(e, '_name'):
             children.append({"name": e._name, "value": "", "children": []})
     return {"name": name, "value": "", "children": children}
