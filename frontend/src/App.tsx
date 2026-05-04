@@ -728,9 +728,6 @@ export default function App() {
             <button onClick={handleDecode} disabled={busy !== null || !hexData.trim()}>
               {busy === "decode" ? "Decoding..." : "Decode"}
             </button>
-            <button className="accent-button" onClick={handleEncode} disabled={busy !== null || !decodeResult}>
-              {busy === "encode" ? "Encoding..." : "Encode"}
-            </button>
             {decodeResult ? (
               <label className="inline-checkbox checkbox-chip">
                 <input type="checkbox" checked={showTextView} onChange={(event) => setShowTextView(event.target.checked)} />
@@ -760,6 +757,29 @@ export default function App() {
                 rawValue={currentRawValue}
               />
             </div>
+            <div className="button-row tree-actions">
+              <button className="accent-button" onClick={handleEncode} disabled={busy !== null || !decodeResult}>
+                {busy === "encode" ? "Encoding..." : "Encode"}
+              </button>
+            </div>
+            {encodeResult ? (
+              <div className="inline-result">
+                <div className="panel-heading">
+                  <h2>Encode Result</h2>
+                  <span>{`${encodeResult.length} bytes`}</span>
+                </div>
+                <div className="result-surface">
+                  <div className="result-item">
+                    <label>Hex</label>
+                    <code>{encodeResult.hex}</code>
+                  </div>
+                  <div className="result-item">
+                    <label>C Array</label>
+                    <code>{encodeResult.cArray}</code>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </section>
         ) : null}
 
@@ -770,25 +790,6 @@ export default function App() {
               <span>ASN.1 or NAS dump</span>
             </div>
             <pre className="text-surface">{decodeResult?.textView || "No decoded text yet."}</pre>
-          </section>
-        ) : null}
-
-        {encodeResult ? (
-          <section className="panel result-panel">
-            <div className="panel-heading">
-              <h2>Encode Result</h2>
-              <span>{`${encodeResult.length} bytes`}</span>
-            </div>
-            <div className="result-surface">
-              <div className="result-item">
-                <label>Hex</label>
-                <code>{encodeResult.hex}</code>
-              </div>
-              <div className="result-item">
-                <label>C Array</label>
-                <code>{encodeResult.cArray}</code>
-              </div>
-            </div>
           </section>
         ) : null}
 

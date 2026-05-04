@@ -211,6 +211,14 @@ textarea {
   align-items: center;
 }
 
+.tree-actions {
+  margin-top: 1rem;
+}
+
+.inline-result {
+  margin-top: 1rem;
+}
+
 .inline-checkbox {
   display: inline-flex;
   align-items: center;
